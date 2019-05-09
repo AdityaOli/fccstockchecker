@@ -7,8 +7,14 @@
 */
 
 var chai = require('chai');
-suite('Unit Tests', function(){
+var StockHandler = require('../controllers/stockHandler.js');
 
-//none requiered
+var stockPrices = new StockHandler();
+
+suite('Unit Tests', function(){
+  
+  suite('Function convertHandler.getNum(input)', function() {
+    
+  });
 
 });
