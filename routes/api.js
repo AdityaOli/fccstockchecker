@@ -6,128 +6,59 @@
 *
 */
 
-"use strict";
+'use strict';
 
-const expect = require("chai").expect;
-const MongoClient = require("mongodb");
-const https = require("https");
-
-const CONNECTION_STRING = process.env.DB; //MongoClient.connect(CONNECTION_STRING, function(err, db) {});
+var expect = require('chai').expect;
+var StockHandler = require('../controllers/stockHandler.js');
 
 module.exports = function (app) {
+  
+  var stockPrices = new StockHandler();
 
-  app.route("/api/stock-prices")
+  app.route('/api/stock-prices')
     .get(function (req, res){
-      const stocks = typeof req.query.stock === "string" ? [ req.query.stock ] : req.query.stock;
-      const markLiked = req.query.like === "true";
-      const ip = req.headers["x-forwarded-for"].split(",")[0];
-      const likes = {};
-
-      let db;
-      let stockDB;
-      let stockData;
-
-      MongoClient.connect(CONNECTION_STRING)
-      .then(client => {
-        db = client;
-        stockDB = db.collection("stocks");
-        const pArray = [];
-
-        if (markLiked) {
-          stocks.forEach(stock => {
-            const doc = {
-              stock: stock.toUpperCase(),
-              ip: ip
-            };
-
-            pArray.push(
-              stockDB.find(doc).count()
-              .then(amount => {
-                if (amount === 0) {
-                  return stockDB.insertOne(doc);
-                }
-              })
-            );
-          });
-        }
-
-        return Promise.all(pArray);
-      })
-      .then(() => {
-        const pArray = [];
-
-        stocks.forEach(stock => {
-          pArray.push(
-            stockDB.find({ stock: stock.toUpperCase() }).count()
-            .then(amount => {
-              likes[stock] = amount;
-            })
-          );
-        });
-
-        return Promise.all(pArray);
-      })
-      .then(() => {
-        const apiurl = `https://api.iextrading.com/1.0/stock/market/batch?symbols=${
-          stocks.join(",")
-        }&types=quote`;
-
-        return new Promise((resolve, reject) => {
-          https.get(apiurl, response => {
-            let body = "";
-            response.on("data", chunk => body += chunk);
-            response.on("end", () => {
-              stockData = JSON.parse(body);
-              resolve();
-            });
-            response.on("error", () => {
-              reject("Error calling API");
-            });
-          });
-        });
-      })
-      .then(() => {
-        const stockDataArray = [];
-        let returnData;
-
-        stocks.forEach(stock => {
-          stockDataArray.push({
-            stock: stock.toUpperCase(),
-            price: stockData[stock.toUpperCase()].quote.latestPrice.toString(),
-            likes: likes[stock]
-          });
-        });
-
-        if (stockDataArray.length === 1) {
-          returnData = {
-            stock: stockDataArray[0].stock,
-            price: stockDataArray[0].price,
-            likes: stockDataArray[0].likes
-          }
+      var stock = req.query.stock;
+      var like = req.query.like || false;
+      var reqIP = req.connection.remoteAddress;
+      var stockData = null;
+      var likeData = null;
+      var multiple = false;
+      if (Array.isArray(stock)) {
+        multiple = true;
+        stockData = [];
+        likeData = [];
+      }
+      function sync(finished, data) {
+        if (finished == 'stockData') {
+          (multiple) ? stockData.push(data) : stockData = data;
         } else {
-          returnData = [
-            {
-              stock: stockDataArray[0].stock,
-              price: stockDataArray[0].price,
-              rel_likes: stockDataArray[0].likes - stockDataArray[1].likes
-            },
-            {
-              stock: stockDataArray[1].stock,
-              price: stockDataArray[1].price,
-              rel_likes: stockDataArray[1].likes - stockDataArray[0].likes
-            }
-          ];
+          (multiple) ? likeData.push(data) : likeData = data;
         }
-
-        res.json({
-          stockData: returnData
-        });
-      })
-      .catch(err => {
-        res.status(500).send(err.message || err);
-      })
-      .then(() => {
-        db.close();
-      });
+        
+        if (!multiple && stockData && likeData !== null) {
+          stockData.likes = likeData.likes;
+          res.json({stockData});
+        } else if (multiple && stockData.length == 2 && likeData.length == 2) {
+          if (stockData[0].stock == likeData[0].stock) {
+            stockData[0].rel_likes = likeData[0].likes - likeData[1].likes;
+            stockData[1].rel_likes = likeData[1].likes - likeData[0].likes;
+          } else {
+            stockData[0].rel_likes = likeData[1].likes - likeData[0].likes;
+            stockData[1].rel_likes = likeData[0].likes - likeData[1].likes;
+          }
+          res.json({stockData});
+        }
+      }
+      if (multiple) {
+        stockPrices.getData(stock[0], sync);
+        stockPrices.loadLikes(stock[0], like, reqIP, sync); 
+        stockPrices.getData(stock[1], sync);
+        stockPrices.loadLikes(stock[1], like, reqIP, sync);
+      } else {
+        stockPrices.getData(stock, sync);
+        stockPrices.loadLikes(stock, like, reqIP, sync);
+      }
+      
     });
+    
 };
